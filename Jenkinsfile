@@ -5,13 +5,14 @@ pipeline {
         // SonarQube Scanner tool name (defined in Global Tool Configuration)
         SCANNER_HOME = tool 'sonar-scanner'
 
-        // Nexus settings (NOT secret)
-        NEXUS_URL  = 'http://54.89.128.176:8081'    
-        NEXUS_REPO = 'doctor-artifacts'               
+        // Nexus settings
+        NEXUS_URL  = 'http://54.89.128.176:8081'
+        NEXUS_REPO = 'doctor-artifacts'
         APP_NAME   = 'doctor-website'
     }
 
     stages {
+
         stage('Git Checkout') {
             steps {
                 git branch: 'main',
@@ -21,30 +22,29 @@ pipeline {
         }
 
         stage('List Source Files') {
-            steps {
-                sh 'ls -R'
-            }
+            steps { sh 'ls -R' }
         }
 
-        // ===== SECURITY: FILE SYSTEM SCAN =====
+        // ========== SECURITY SCAN ==========
         stage('File System Scan') {
             steps {
                 sh "trivy fs --format table -o trivy-fs-report.html ."
             }
         }
 
-        // ===== SONARQUBE (optional – remove if not using) =====
+        // ========== SONARQUBE ==========
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
                     withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                        sh '''
+                        sh """
                             $SCANNER_HOME/bin/sonar-scanner \
-                            -Dsonar.projectKey=doctor-website \
-                            -Dsonar.projectName=doctor-website \
-                            -Dsonar.sources=. \
-                            -Dsonar.sourceEncoding=UTF-8
-                        '''
+                              -Dsonar.projectKey=doctor-website \
+                              -Dsonar.projectName=doctor-website \
+                              -Dsonar.sources=. \
+                              -Dsonar.sourceEncoding=UTF-8 \
+                              -Dsonar.login=$SONAR_TOKEN
+                        """
                     }
                 }
             }
@@ -54,12 +54,12 @@ pipeline {
             steps {
                 script {
                     def qg = waitForQualityGate abortPipeline: false
-                    echo "Quality Gate status: ${qg.status}"
+                    echo "Quality Gate: ${qg.status}"
                 }
             }
         }
 
-        // ===== PACKAGE ARTIFACT (ZIP WEBSITE) =====
+        // ========== PACKAGE ARTIFACT ==========
         stage('Package Artifact') {
             steps {
                 script {
@@ -67,13 +67,12 @@ pipeline {
                         rm -f ${APP_NAME}-${BUILD_NUMBER}.zip
                         zip -r ${APP_NAME}-${BUILD_NUMBER}.zip ./*
                     """
-                    // Archive inside Jenkins as well
                     archiveArtifacts artifacts: "${APP_NAME}-${BUILD_NUMBER}.zip", fingerprint: true
                 }
             }
         }
 
-        // ===== PUBLISH ARTIFACT TO NEXUS =====
+        // ========== UPLOAD TO NEXUS ==========
         stage('Publish to Nexus') {
             steps {
                 script {
@@ -82,7 +81,7 @@ pipeline {
                         usernameVariable: 'NEXUS_USER',
                         passwordVariable: 'NEXUS_PASS'
                     )]) {
-                        // Path in Nexus: /repository/<repo>/<app-name>/<build>/artifact.zip
+
                         sh """
                             curl -v -u "$NEXUS_USER:$NEXUS_PASS" \
                               --upload-file ${APP_NAME}-${BUILD_NUMBER}.zip \
@@ -92,8 +91,49 @@ pipeline {
                 }
             }
         }
+
+        // ===================================================
+        // =============== DEPLOY TO AMAZON EKS ===============
+        // ===================================================
+        stage('Deploy to EKS') {
+            steps {
+                echo "Deploying to Amazon EKS..."
+
+                // kubeconfig stored as a Jenkins "Secret file" credential
+                withCredentials([file(credentialsId: 'k8-cred', variable: 'KUBECONFIG')]) {
+
+                    sh """
+                        # Show cluster info
+                        kubectl --kubeconfig=$KUBECONFIG cluster-info
+
+                        # Apply deployment & service YAML
+                        kubectl --kubeconfig=$KUBECONFIG apply -f deployment-service.yaml -n webapps
+
+                        # Optional: update ENV to point to Nexus artifact URL
+                        kubectl --kubeconfig=$KUBECONFIG set env deployment/doctor-website \
+                            ARTIFACT_URL=${NEXUS_URL}/repository/${NEXUS_REPO}/${APP_NAME}/${BUILD_NUMBER}/${APP_NAME}-${BUILD_NUMBER}.zip \
+                            -n webapps
+                    """
+                }
+            }
+        }
+
+        stage('Verify Deployment on EKS') {
+            steps {
+                withCredentials([file(credentialsId: 'k8-cred', variable: 'KUBECONFIG')]) {
+                    sh """
+                        echo "Checking pods..."
+                        kubectl --kubeconfig=$KUBECONFIG get pods -n webapps
+
+                        echo "Checking services..."
+                        kubectl --kubeconfig=$KUBECONFIG get svc -n webapps
+                    """
+                }
+            }
+        }
     }
 
+    // ========== EMAIL NOTIFICATION ==========
     post {
         always {
             script {
@@ -108,20 +148,18 @@ pipeline {
                 <div style="border: 4px solid ${bannerColor}; padding:10px;">
                     <h2>${jobName} - Build ${buildNumber}</h2>
                     <div style="background-color:${bannerColor}; padding:10px;">
-                        <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+                        <h3 style="color: white;">Status: ${pipelineStatus.toUpperCase()}</h3>
                     </div>
-                    <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
+                    <p>Check the <a href="${BUILD_URL}">Console Output</a>.</p>
                 </div>
                 </body>
                 </html>
                 """
 
                 emailext(
-                    subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                    subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus}",
                     body: body,
                     to: 'sanjaysadineni7209@gmail.com',
-                    from: 'jenkins@example.com',
-                    replyTo: 'jenkins@example.com',
                     mimeType: 'text/html',
                     attachmentsPattern: 'trivy-fs-report.html'
                 )
