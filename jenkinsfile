@@ -15,7 +15,7 @@ pipeline {
         stage('Git Checkout') {
             steps {
                 git branch: 'main',
-                    credentialsId: 'git-cred',
+                    credentialsId: 'git-cred2',
                     url: 'https://github.com/your-user/your-doctor-website-repo.git'
             }
         }
