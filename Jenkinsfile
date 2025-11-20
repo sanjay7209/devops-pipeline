@@ -16,7 +16,7 @@ pipeline {
             steps {
                 git branch: 'main',
                     credentialsId: 'git-cred2',
-                    url: 'https://github.com/your-user/your-doctor-website-repo.git'
+                    url: 'https://github.com/sanjay7209/devops-pipeline.git'
             }
         }
 
