@@ -53,7 +53,8 @@ pipeline {
         stage('Quality Gate') {
             steps {
                 script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                    def qg = waitForQualityGate abortPipeline: false
+                    echo "Quality Gate status: ${qg.status}"
                 }
             }
         }
