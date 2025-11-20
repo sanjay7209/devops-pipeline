@@ -37,13 +37,15 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh '''
-                        $SCANNER_HOME/bin/sonar-scanner \
-                          -Dsonar.projectKey=doctor-website \
-                          -Dsonar.projectName=doctor-website \
-                          -Dsonar.sources=. \
-                          -Dsonar.sourceEncoding=UTF-8
-                    '''
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                        sh '''
+                            $SCANNER_HOME/bin/sonar-scanner \
+                            -Dsonar.projectKey=doctor-website \
+                            -Dsonar.projectName=doctor-website \
+                            -Dsonar.sources=. \
+                            -Dsonar.sourceEncoding=UTF-8
+                        '''
+                    }
                 }
             }
         }
