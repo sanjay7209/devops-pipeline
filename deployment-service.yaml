@@ -1,39 +1,81 @@
+# NAMESPACE
 apiVersion: v1
 kind: Namespace
 metadata:
   name: webapps
 ---
+# DEPLOYMENT
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: my-app
+  name: doctor-website
   namespace: webapps
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: my-app
+      app: doctor-website
   template:
     metadata:
       labels:
-        app: my-app
+        app: doctor-website
     spec:
       containers:
-        - name: my-app
-          image: <YOUR_DOCKER_REPO>:latest   # e.g. youruser/boardshack:latest
+        - name: doctor-website
+          image: nginx:alpine   # Use Nginx to serve the static site
           ports:
-            - containerPort: 8080
+            - containerPort: 80
+
+          # Jenkins sets ARTIFACT_URL after publishing to Nexus
+          env:
+            - name: ARTIFACT_URL
+              value: ""   # Jenkins will update this via kubectl set env
+
+          # Download ZIP from Nexus, extract into Nginx html dir, then start Nginx
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Installing curl and unzip..."
+              apk add --no-cache curl unzip >/dev/null
+
+              echo "Downloading website from: $ARTIFACT_URL"
+              curl -L -o /tmp/site.zip "$ARTIFACT_URL"
+
+              echo "Cleaning old nginx html..."
+              rm -rf /usr/share/nginx/html/*
+
+              echo "Extracting site.zip to /usr/share/nginx/html..."
+              unzip /tmp/site.zip -d /usr/share/nginx/html/
+
+              echo "Starting Nginx..."
+              nginx -g "daemon off;"
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
 ---
+# SERVICE
 apiVersion: v1
 kind: Service
 metadata:
-  name: my-app-svc
+  name: doctor-website-svc
   namespace: webapps
 spec:
-  type: NodePort
   selector:
-    app: my-app
+    app: doctor-website
+  type: LoadBalancer          # EKS will provision an external LB
   ports:
-    - port: 80
-      targetPort: 8080
-      nodePort: 31508   
+    - name: http
+      port: 80
+      targetPort: 80
+
